@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.pipeline import Pipeline
 
 #1. Load
 def load_data(file_path):
@@ -130,29 +131,64 @@ def drop_redundant_columns(df):
     df = df.drop(columns=cols_to_drop)
     return df
 
-# 6. Split features/target
-def split_features_target(df):
-    y = np.log1p(df['SalePrice'])
-    X = df.drop(columns=['SalePrice', 'Id', 'is_outlier'])
-    return X, y
-
 # 7. Build the ColumnTransformer (one-hot + scaling)
+
+NOMINAL_COLS = ['MSSubClass', 'MSZoning', 'Alley', 'LandContour', 'LotConfig',
+                 'Neighborhood', 'Condition1', 'Condition2', 'BldgType', 'HouseStyle',
+                 'RoofStyle', 'RoofMatl', 'Exterior1st', 'Exterior2nd', 'MasVnrType',
+                 'Foundation', 'Heating', 'Electrical', 'GarageType', 'Fence', 'MiscFeature',
+                 'SaleType', 'SaleCondition']
+
 def build_preprocessor(X):
-    nominal_cols = ['MSSubClass', 'MSZoning', 'Alley', 'LandContour', 'LotConfig',
-                     'Neighborhood', 'Condition1', 'Condition2', 'BldgType', 'HouseStyle',
-                     'RoofStyle', 'RoofMatl', 'Exterior1st', 'Exterior2nd', 'MasVnrType',
-                     'Foundation', 'Heating', 'Electrical', 'GarageType', 'Fence', 'MiscFeature',
-                     'SaleType', 'SaleCondition']
+
     
-    numeric_cols = [col for col in X.columns if col not in nominal_cols]
+    numeric_cols = [col for col in X.columns if col not in NOMINAL_COLS]
 
     preprocessor = ColumnTransformer(transformers=[
-        ('onehot', OneHotEncoder(handle_unknown='ignore'), nominal_cols),
+        ('onehot', OneHotEncoder(handle_unknown='ignore'), NOMINAL_COLS),
         ('scale', StandardScaler(), numeric_cols)
     ])
     
     return preprocessor
 
+def build_preprocessor_scaled(X):
+
+    numeric_cols = [col for col in X.columns if col not in NOMINAL_COLS]
+
+    nominal_transformer = Pipeline(steps=[
+        ('onehot', OneHotEncoder(handle_unknown='ignore')),
+        ('scale', StandardScaler(with_mean=False))       
+    ])
+
+    preprocessor = ColumnTransformer(transformers=[
+        ('nominal', nominal_transformer, NOMINAL_COLS),
+        ('numeric', StandardScaler(), numeric_cols)
+    ])
+
+    return preprocessor
+
+def split_features_target(df):
+    if 'SalePrice' in df.columns:
+        y = np.log1p(df['SalePrice'])
+        X = df.drop(columns=['SalePrice', 'Id', 'is_outlier'])
+    else:
+        y = None
+        X = df.drop(columns=['Id', 'is_outlier'])
+    return X, y
+
+def full_pipeline(file_path, stats=None):
+    df = load_data(file_path)
+    df = clean_deterministic_data(df)
+    
+    if stats is None:
+        stats = fit_imputation_stats(df)
+    
+    df = apply_imputation_stats(df, stats)
+    df = engineer_features(df)
+    df = flag_outliers(df)
+    df = drop_redundant_columns(df)
+    X, y = split_features_target(df)
+    return X, y, stats
 
 if __name__ == '__main__':
     df = load_data('../data/train.csv')
