@@ -10,6 +10,29 @@ def load_data(file_path):
     return df
 
 #2. Clean deterministic data from Phase 2
+# def clean_deterministic_data(df):
+
+#     df.loc[332, 'BsmtFinType2'] = 'Unf'
+#     df.loc[948, 'BsmtExposure'] = df['BsmtExposure'].mode()[0]
+
+#     cols = ['PoolQC', 'MiscFeature', 'Alley', 'Fence', 'FireplaceQu',
+#             'GarageFinish', 'GarageQual', 'GarageCond', 'GarageType', 
+#             'BsmtExposure', 'BsmtFinType2', 'BsmtFinType1', 'BsmtCond', 'BsmtQual']
+#     df[cols] = df[cols].fillna('None')
+
+#     # MasVnrType / MasVnrArea — special handling for 5 inconsistent rows
+#     mode_type = df['MasVnrType'].mode()[0]
+#     inconsistent_mask = df['MasVnrType'].isnull() & (df['MasVnrArea'] > 0)
+#     df.loc[inconsistent_mask, 'MasVnrType'] = mode_type
+#     df['MasVnrType'] = df['MasVnrType'].fillna('None')
+#     df['MasVnrArea'] = df['MasVnrArea'].fillna(0)
+
+#     df['Electrical'] = df['Electrical'].fillna(df['Electrical'].mode()[0])
+
+#     df['GarageYrBlt'] = df['GarageYrBlt'].fillna(0)
+    
+#     return df
+
 def clean_deterministic_data(df):
 
     df.loc[332, 'BsmtFinType2'] = 'Unf'
@@ -30,7 +53,19 @@ def clean_deterministic_data(df):
     df['Electrical'] = df['Electrical'].fillna(df['Electrical'].mode()[0])
 
     df['GarageYrBlt'] = df['GarageYrBlt'].fillna(0)
-    
+
+    # Basement/Garage numeric columns — only appear missing in test.csv,
+    # likely means "no basement"/"no garage", consistent with Phase 2 findings
+    zero_fill_cols = ['BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'TotalBsmtSF',
+                       'BsmtFullBath', 'BsmtHalfBath', 'GarageCars', 'GarageArea']
+    df[zero_fill_cols] = df[zero_fill_cols].fillna(0)
+
+    # Genuinely missing categoricals, only appear missing in test.csv — fill with mode
+    mode_fill_cols = ['MSZoning', 'Exterior1st', 'Exterior2nd', 'SaleType',
+                       'KitchenQual', 'Utilities', 'Functional']
+    for col in mode_fill_cols:
+        df[col] = df[col].fillna(df[col].mode()[0])
+
     return df
 
 # 3. Clean — statistics-based parts (must fit on train, reuse on test)
