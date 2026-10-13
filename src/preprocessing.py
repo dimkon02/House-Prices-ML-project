@@ -9,48 +9,37 @@ def load_data(file_path):
     df = pd.read_csv(file_path)
     return df
 
-#2. Clean deterministic data from Phase 2
-# def clean_deterministic_data(df):
+# 2. Fit statistics on train only (reused unchanged on test, so test never informs its own fills)
+MODE_FILL_COLS = ['MSZoning', 'Exterior1st', 'Exterior2nd', 'SaleType',
+                  'KitchenQual', 'Utilities', 'Functional', 'Electrical']
 
-#     df.loc[332, 'BsmtFinType2'] = 'Unf'
-#     df.loc[948, 'BsmtExposure'] = df['BsmtExposure'].mode()[0]
+def fit_imputation_stats(df):
+    return {
+        'neighborhood_median': df.groupby('Neighborhood')['LotFrontage'].median(),
+        'overall_median': df['LotFrontage'].median(),
+        'modes': {col: df[col].mode()[0] for col in MODE_FILL_COLS + ['BsmtExposure', 'MasVnrType']}
+    }
 
-#     cols = ['PoolQC', 'MiscFeature', 'Alley', 'Fence', 'FireplaceQu',
-#             'GarageFinish', 'GarageQual', 'GarageCond', 'GarageType', 
-#             'BsmtExposure', 'BsmtFinType2', 'BsmtFinType1', 'BsmtCond', 'BsmtQual']
-#     df[cols] = df[cols].fillna('None')
+# 3. Clean — fills use only the train statistics passed in
+def clean_data(df, stats):
+    modes = stats['modes']
 
-#     # MasVnrType / MasVnrArea — special handling for 5 inconsistent rows
-#     mode_type = df['MasVnrType'].mode()[0]
-#     inconsistent_mask = df['MasVnrType'].isnull() & (df['MasVnrArea'] > 0)
-#     df.loc[inconsistent_mask, 'MasVnrType'] = mode_type
-#     df['MasVnrType'] = df['MasVnrType'].fillna('None')
-#     df['MasVnrArea'] = df['MasVnrArea'].fillna(0)
-
-#     df['Electrical'] = df['Electrical'].fillna(df['Electrical'].mode()[0])
-
-#     df['GarageYrBlt'] = df['GarageYrBlt'].fillna(0)
-    
-#     return df
-
-def clean_deterministic_data(df):
-
-    df.loc[332, 'BsmtFinType2'] = 'Unf'
-    df.loc[948, 'BsmtExposure'] = df['BsmtExposure'].mode()[0]
+    # Houses that have a basement but one basement field is missing -> genuinely missing, not "no basement".
+    # Matched by condition (not row number) so the same rule is safe on test.
+    has_bsmt = df['BsmtQual'].notnull()
+    df.loc[has_bsmt & df['BsmtFinType2'].isnull(), 'BsmtFinType2'] = 'Unf'
+    df.loc[has_bsmt & df['BsmtExposure'].isnull(), 'BsmtExposure'] = modes['BsmtExposure']
 
     cols = ['PoolQC', 'MiscFeature', 'Alley', 'Fence', 'FireplaceQu',
             'GarageFinish', 'GarageQual', 'GarageCond', 'GarageType', 
             'BsmtExposure', 'BsmtFinType2', 'BsmtFinType1', 'BsmtCond', 'BsmtQual']
     df[cols] = df[cols].fillna('None')
 
-    # MasVnrType / MasVnrArea — special handling for 5 inconsistent rows
-    mode_type = df['MasVnrType'].mode()[0]
+    # MasVnrType / MasVnrArea — special handling for inconsistent rows (type missing but area > 0)
     inconsistent_mask = df['MasVnrType'].isnull() & (df['MasVnrArea'] > 0)
-    df.loc[inconsistent_mask, 'MasVnrType'] = mode_type
+    df.loc[inconsistent_mask, 'MasVnrType'] = modes['MasVnrType']
     df['MasVnrType'] = df['MasVnrType'].fillna('None')
     df['MasVnrArea'] = df['MasVnrArea'].fillna(0)
-
-    df['Electrical'] = df['Electrical'].fillna(df['Electrical'].mode()[0])
 
     df['GarageYrBlt'] = df['GarageYrBlt'].fillna(0)
 
@@ -60,29 +49,23 @@ def clean_deterministic_data(df):
                        'BsmtFullBath', 'BsmtHalfBath', 'GarageCars', 'GarageArea']
     df[zero_fill_cols] = df[zero_fill_cols].fillna(0)
 
-    # Genuinely missing categoricals, only appear missing in test.csv — fill with mode
-    mode_fill_cols = ['MSZoning', 'Exterior1st', 'Exterior2nd', 'SaleType',
-                       'KitchenQual', 'Utilities', 'Functional']
-    for col in mode_fill_cols:
-        df[col] = df[col].fillna(df[col].mode()[0])
+    # Genuinely missing categoricals — fill with the train mode
+    for col in MODE_FILL_COLS:
+        df[col] = df[col].fillna(modes[col])
 
-    return df
+    df['LotFrontage'] = df['LotFrontage'].fillna(
+        df['Neighborhood'].map(stats['neighborhood_median'])
+    ).fillna(stats['overall_median'])
 
-# 3. Clean — statistics-based parts (must fit on train, reuse on test)
-def fit_imputation_stats(df):
-    return {
-        'neighborhood_median': df.groupby('Neighborhood')['LotFrontage'].median(),
-        'overall_median': df['LotFrontage'].median()
-    }
-
-def apply_imputation_stats(df, stats):
-    df['LotFrontage'] = df.groupby('Neighborhood')['LotFrontage'].transform(
-        lambda x: x.fillna(stats['neighborhood_median'].get(x.name, stats['overall_median']))
-    )
     return df
 
 def flag_outliers(df):
-    df['is_outlier'] = df.index.isin([523, 1298])
+    # Very large houses sold unusually cheap (partial sales of unfinished new builds, found in Phase 1).
+    # Only train has SalePrice, so test rows are never flagged.
+    if 'SalePrice' in df.columns:
+        df['is_outlier'] = (df['GrLivArea'] > 4000) & (df['SalePrice'] < 300000)
+    else:
+        df['is_outlier'] = False
     return df
 
 
@@ -213,12 +196,11 @@ def split_features_target(df):
 
 def full_pipeline(file_path, stats=None):
     df = load_data(file_path)
-    df = clean_deterministic_data(df)
-    
+
     if stats is None:
         stats = fit_imputation_stats(df)
-    
-    df = apply_imputation_stats(df, stats)
+
+    df = clean_data(df, stats)
     df = engineer_features(df)
     df = flag_outliers(df)
     df = drop_redundant_columns(df)
@@ -226,19 +208,15 @@ def full_pipeline(file_path, stats=None):
     return X, y, stats
 
 if __name__ == '__main__':
-    df = load_data('../data/train.csv')
-    df = clean_deterministic_data(df)
-    stats = fit_imputation_stats(df)
-    df = apply_imputation_stats(df, stats)
-    df = engineer_features(df)
-    df = flag_outliers(df) 
-    df = drop_redundant_columns(df)
-    X, y = split_features_target(df)
-    
+    X, y, stats = full_pipeline('../data/train.csv')
+    X_test, _, _ = full_pipeline('../data/test.csv', stats=stats)
+
     print("Nulls in X:", X.isnull().sum().sum())
+    print("Nulls in X_test:", X_test.isnull().sum().sum())
     print("X shape:", X.shape)
+    print("X_test shape:", X_test.shape)
     print("y shape:", y.shape)
-    
+
     preprocessor = build_preprocessor(X)
     X_transformed = preprocessor.fit_transform(X)
     print("Transformed X shape:", X_transformed.shape)
